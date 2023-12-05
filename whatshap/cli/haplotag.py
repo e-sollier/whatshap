@@ -15,6 +15,7 @@ from xopen import xopen
 
 from contextlib import ExitStack
 from whatshap import __version__
+from whatshap.bam import SampleBamReader
 from whatshap.cli import PhasedInputReader, CommandLineError
 from whatshap.vcf import VcfReader, VcfError, VariantTable, VariantCallPhase, VcfInvalidChromosome
 from whatshap.core import NumericSampleIds, Read
@@ -97,8 +98,8 @@ def get_variant_information(variant_table: VariantTable, sample: str):
     for v, gt, phase in zip(variant_table.variants, genotypes, phases):
         if phase is None or phase.block_id is None:
             continue
-        # map block_id to tuple of phases
-        phase_info = int(phase.block_id), phase.phase
+        # assuming ploidy=2
+        phase_info = int(phase.block_id), phase.phase[0]
         vpos_to_phase_info[v.position] = phase_info
         if not gt.is_homozygous():
             variants.append(v)
@@ -157,7 +158,6 @@ def load_chromosome_variants(
 
 def get_haplotag_information(read, variantpos_to_phaseinfo):
     haplotype_costs = defaultdict(int)
-
     for v in read:
         assert v.allele in [0, 1]
         phaseset, allele = variantpos_to_phaseinfo[v.position]
@@ -165,10 +165,10 @@ def get_haplotag_information(read, variantpos_to_phaseinfo):
             haplotype_costs[phaseset] += v.quality
         else:
             haplotype_costs[phaseset] -= v.quality
-
     l = list(haplotype_costs.items())
     l.sort(key=lambda t: -abs(t[1]))
     # logger.info('Read %s: %s', read.name, str(l))
+    
 
     if len(l) == 0:
         return
@@ -178,7 +178,6 @@ def get_haplotag_information(read, variantpos_to_phaseinfo):
         return
 
     haplotype = 0 if quality > 0 else 1
-
     return haplotype, abs(quality), phaseset
 
 
@@ -485,8 +484,7 @@ def run_haplotag(
 
         has_alignments = contigs_with_alignments(bam_reader)
 
-        #TODO ADD
-        #bam_reader = SampleBamReader(alignment_file, reference=reference)
+        bam_reader = SampleBamReader(alignment_file, reference=reference)
 
         for chrom, regions in user_regions.items():
             logger.debug(f"Processing chromosome {chrom}")
@@ -519,7 +517,7 @@ def run_haplotag(
 
             for start, end in regions:
                 logger.debug("Working on %s:%s-%s", chrom, start, end)
-                for alignment in bam_reader.fetch(contig=chrom, start=start, stop=end):
+                for alignment in bam_reader.fetch(reference=chrom, start=start, end=end,sample=None):
                     n_alignments += 1
                     haplotype_name = "none"
 
@@ -571,7 +569,7 @@ def run_haplotag(
                         alignment.bam_alignment.is_secondary or alignment.bam_alignment.is_supplementary
                     ):
                         print(
-                            alignment.query_name,
+                            alignment.bam_alignment.query_name,
                             haplotype_name,
                             phaseset,
                             chrom,
